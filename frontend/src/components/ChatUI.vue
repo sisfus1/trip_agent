@@ -13,7 +13,7 @@
         <input 
           v-model="apiKey" 
           type="password" 
-          placeholder="Gemini API Key..." 
+          placeholder="DeepSeek API Key..." 
           class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-36 shadow-inner"
         />
 
@@ -111,7 +111,7 @@
           </button>
         </div>
         <p class="mt-6 text-sm font-medium" :class="isRecording ? 'text-red-400 animate-pulse' : 'text-purple-400'">
-          {{ isRecording ? 'Listening (Gemini Live Mode)...' : 'Tap to speak' }}
+          {{ isRecording ? 'Listening (Voice Mode)...' : 'Tap to speak' }}
         </p>
       </footer>
     </transition>
@@ -124,7 +124,7 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 const mode = ref('text') // 'text' | 'voice'
 const isConnected = ref(false)
 const messages = ref([
-  { role: 'assistant', content: 'Hello! I am your Vibe Travel Pilot. Please provide your Gemini API Key in the top right, then tell me where you would like to travel.' }
+  { role: 'assistant', content: 'Hello! I am your Vibe Travel Pilot. Please provide your DeepSeek API Key in the top right, then tell me where you would like to travel.' }
 ])
 const inputText = ref('')
 const apiKey = ref('')
@@ -133,6 +133,8 @@ const chatContainer = ref(null)
 
 let ws = null
 let keepAliveInterval = null
+let reconnectTimeout = null
+let reconnectAttempts = 0
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -142,17 +144,25 @@ const scrollToBottom = async () => {
 }
 
 const connectWebSocket = () => {
-  // 基于模式切换后端的 endpoint
+  // 动态获取主机名以兼容不同环境（如本地 localhost, 127.0.0.1 或生产域名）
+  const host = window.location.hostname
   const wsUrl = mode.value === 'text' 
-    ? 'ws://127.0.0.1:8000/ws/chat' 
-    : 'ws://127.0.0.1:8000/ws/gemini-live'
+    ? `ws://${host}:8000/ws/chat` 
+    : `ws://${host}:8000/ws/gemini-live`
     
-  if (ws) ws.close()
+  if (ws) {
+    ws.onclose = null // 防止主动关闭触发重连
+    ws.close()
+  }
+  
+  if (keepAliveInterval) clearInterval(keepAliveInterval)
+  if (reconnectTimeout) clearTimeout(reconnectTimeout)
   
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
     isConnected.value = true
+    reconnectAttempts = 0
     // WebSocket Keep-Alive 机制：每 25 秒给后端发一次 ping
     keepAliveInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN && mode.value === 'text') {
@@ -177,7 +187,13 @@ const connectWebSocket = () => {
 
   ws.onclose = () => {
     isConnected.value = false
-    clearTimeout(keepAliveInterval)
+    if (keepAliveInterval) clearInterval(keepAliveInterval)
+    
+    // 自动重连机制（指数退避）
+    const timeout = Math.min(10000, 1000 * Math.pow(2, reconnectAttempts))
+    reconnectAttempts++
+    console.log(`WebSocket closed. Reconnecting in ${timeout}ms...`)
+    reconnectTimeout = setTimeout(connectWebSocket, timeout)
   }
   
   ws.onerror = (err) => {
@@ -189,7 +205,7 @@ const switchMode = (newMode) => {
   if (mode.value === newMode) return
   mode.value = newMode
   isConnected.value = false
-  // 模式切换时重新建立对应的 WebSocket 连接
+  reconnectAttempts = 0 // 切模式重置重连次数
   connectWebSocket()
 }
 

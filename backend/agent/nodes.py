@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from backend.agent.state import TripState
@@ -19,16 +19,26 @@ class BudgetDecision(BaseModel):
     feedback: str = Field(description="If not approved, the explicit reason why (e.g., 'Hotel is $50 over limit'). If approved, a short confirmation.")
 
 def get_llm():
-    """获取 Gemini 模型实例，必须确保环境变量中存在 GEMINI_API_KEY"""
-    api_key = os.environ.get("GEMINI_API_KEY")
+    """获取 DeepSeek 模型实例，确保环境变量中存在 DEEPSEEK_API_KEY"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment!")
+        raise ValueError("DEEPSEEK_API_KEY not found in environment!")
         
-    return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+    return ChatOpenAI(
+        model="deepseek-chat",
         temperature=0.7,
-        google_api_key=api_key
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1"
     )
+
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import tool
+from backend.travel_mcp_server import mcp_server
+
+@tool
+def get_scenic_data(location_id: str) -> str:
+    """Fetch real-time queue minutes and ticket prices for a given location (e.g., 'disneyland', 'universal_studios', 'eiffel_tower', 'louvre_museum')."""
+    return mcp_server.execute_tool("get_scenic_data", {"location_id": location_id})
 
 @trace_node
 def node_planner(state: TripState) -> Dict[str, Any]:
@@ -43,29 +53,42 @@ def node_planner(state: TripState) -> Dict[str, Any]:
     print(f"\n[Planner] Generating plan for: {user_query}")
     
     # 构造能够注入约束的 Prompt
-    system_prompt = "You are a senior travel planner. Draft a comprehensive daily itinerary and estimate the total costs."
+    system_prompt = "You are a senior travel planner. Draft a comprehensive daily itinerary and estimate the total costs. Use the get_scenic_data tool to get real-time queue and price data for locations."
     if feedback:
         print(f"[Planner] ⚠️ Received constraint feedack: {feedback}. Adjusting plan...")
-        system_prompt += f"\n\nCRITICAL FEEDBACK FROM BUDGET INSPECTOR YOU MUST SATISFY: {feedback}"
+        system_prompt += f"\n\nCRITICAL FEEDBACK FROM BUDGET INSPECTOR YOU MUST SATISFY BEFORE APPROVAL: {feedback}"
         
+    chat_history = "\n".join(state.get("messages", []))
+    
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        ("human", "User request: {query}")
+        ("human", "Conversation History:\n{history}\n\nLatest Request: {query}")
     ])
     
-    try:
-        llm = get_llm()
-        chain = prompt | llm
-        response = chain.invoke({"query": user_query})
-        new_plan = response.content
+    llm = get_llm().bind_tools([get_scenic_data])
+    messages = prompt.format_prompt(history=chat_history, query=user_query).to_messages()
+    
+    response = llm.invoke(messages)
+    
+    # 处理内置工具调用循环
+    while response.tool_calls:
+        messages.append(response)
+        for tc in response.tool_calls:
+            print(f"[Planner] 🛠️ Calling tool {tc['name']} with args {tc['args']}")
+            if tc['name'] == 'get_scenic_data':
+                tool_result = get_scenic_data.invoke(tc['args'])
+                messages.append(ToolMessage(content=tool_result, tool_call_id=tc['id']))
+        response = llm.invoke(messages)
         
-        return {
-            "current_plan": new_plan,
-            "messages": [f"Planner proposed a plan (Snippet: {new_plan[:50]}...)"],
-            "feedback": None # 只要执行 Planner，证明发起了一次新提案，清空上一轮的拒绝 feedback
-        }
-    except Exception as e:
-        return {"messages": [f"Planner encountered an error: {e}"]}
+    new_plan = response.content
+    
+    return {
+        "current_plan": new_plan,
+        "messages": [f"Planner proposed a plan (Snippet: {new_plan[:50]}...)"],
+        "feedback": None # 只要执行 Planner，证明发起了一次新提案，清空上一轮的拒绝 feedback
+    }
+
+from langchain_core.output_parsers import JsonOutputParser
 
 @trace_node
 def node_budget_inspector(state: TripState) -> Dict[str, Any]:
@@ -73,40 +96,49 @@ def node_budget_inspector(state: TripState) -> Dict[str, Any]:
     Budget 节点:
     负责审核 current_plan 是否超标。
     如果拒接，则填入详细的 feedback 给出超支数额。
+    改为使用 JsonOutputParser 以兼容所有大模型（如 DeepSeek 不支持原生的 structured_output 时）。
     """
     plan = state.get("current_plan", "")
     rounds = state.get("negotiation_rounds", 0)
     
-    print(f"[Budget] Inspecting plan (Round {rounds})...")
-
+    parser = JsonOutputParser(pydantic_object=BudgetDecision)
+    chat_history_text = "\n".join(state.get("messages", []))
+    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a strict Budget Inspector for a travel agency. Analyze the provided travel plan. "
-                   "If it seems unreasonably expensive or lacking cost details for a standard traveler, reject it and provide precise feedback on what to cut. "
-                   "If it is reasonable, approve it."),
-        ("human", "Plan to review:\n{plan}")
+        ("system", "You are a Budget Inspector for a travel agency. Analyze the provided travel plan and the user's chat history.\n"
+                   "CRITICAL RULE: If the user explicitly stated they want 'luxury' or 'cost is not a concern', DO NOT reject it for being expensive. Approve it.\n"
+                   "Otherwise, if it seems unreasonably expensive or lacking logical details for a standard traveler, reject it and provide precise feedback to the Planner on what to fix.\n"
+                   "If it is reasonable and matches the user's vibe, approve it.\n\n"
+                   "{format_instructions}"),
+        ("human", "Conversation History:\n{history}\n\nPlan to review:\n{plan}")
     ])
     
+    llm = get_llm()
+    chain = prompt | llm | parser
+    
     try:
-        llm = get_llm()
-        # 强制 Gemini 结构化输出
-        chain = prompt | llm.with_structured_output(schema=BudgetDecision)
-        decision: BudgetDecision = chain.invoke({"plan": plan})
-        
-        if not decision.is_approved:
-            return {
-                "is_approved": False,
-                "feedback": decision.feedback,
-                "negotiation_rounds": rounds + 1,
-                "messages": [f"Budget REJECTED plan. Reason: {decision.feedback}"]
-            }
-        
-        return {
-            "is_approved": True,
-            "final_output": f"Final Approved Plan:\n\n{plan}",
-            "messages": [f"Budget APPROVED the plan. Final thought: {decision.feedback}"]
-        }
+        decision_dict = chain.invoke({
+            "history": chat_history_text,
+            "plan": plan,
+            "format_instructions": parser.get_format_instructions()
+        })
+        decision = BudgetDecision(**decision_dict)
     except Exception as e:
-        return {"messages": [f"Budget Inspector encountered an error: {e}"]}
+         return {"messages": [f"Budget Inspector failed to parse JSON: {str(e)}"]}
+    
+    if not decision.is_approved:
+        return {
+            "is_approved": False,
+            "feedback": decision.feedback,
+            "negotiation_rounds": rounds + 1,
+            "messages": [f"Budget REJECTED plan. Reason: {decision.feedback}"]
+        }
+    
+    return {
+        "is_approved": True,
+        "final_output": f"Final Approved Plan:\n\n{plan}",
+        "messages": [f"Budget APPROVED the plan. Final thought: {decision.feedback}"]
+    }
 
 @trace_node
 def node_fallback(state: TripState) -> Dict[str, Any]:

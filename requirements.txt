@@ -3,3 +3,6 @@ uvicorn
 chromadb
 langgraph
 langsmith
+langchain
+langchain-core
+langchain-openai
