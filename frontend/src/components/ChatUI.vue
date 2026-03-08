@@ -179,13 +179,28 @@ const connectWebSocket = () => {
   }
 
   ws.onmessage = (event) => {
-    if (mode.value === 'text') {
+    if (mode.value === 'text' || mode.value === 'voice') {
       try {
         const data = event.data
         if (data === '{"type":"pong"}') return // 忽略心跳包回应
         
+        // 渲染消息到界面
         messages.value.push({ role: 'assistant', content: data })
         scrollToBottom()
+        
+        // 全双工语音合成: 当处于 Voice 模式且收到最终规划时，唤起 TTS 大声朗读
+        if (mode.value === 'voice' && data.includes('[Final Travel Plan Generated]')) {
+           const cleanTextForSpeech = data.replace(/🎉 \[Final Travel Plan Generated\]/g, '').trim()
+           const utterance = new SpeechSynthesisUtterance(cleanTextForSpeech);
+           utterance.lang = 'en-US';
+           utterance.rate = 1.0;
+           utterance.pitch = 1.0;
+           // 确保兼容性
+           if (window.speechSynthesis) {
+               window.speechSynthesis.speak(utterance);
+           }
+        }
+        
       } catch(e) {
         console.error("Message parsing error:", e)
       }
@@ -238,8 +253,62 @@ const sendMessage = () => {
 }
 
 const toggleVoiceRecording = () => {
-  isRecording.value = !isRecording.value
-  // TODO: 后续接入 WebRTC getUserMedia 获取音频流发送至 ws
+  if (isRecording.value) {
+    // 强制提早结束录音
+    if (window.recognitionInstance) {
+      window.recognitionInstance.stop()
+    }
+    isRecording.value = false
+    return
+  }
+
+  // 检查浏览器兼容性
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert("Sorry, your browser doesn't support the Web Speech API. Please try Google Chrome or Safari on HTTPS.");
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.lang = 'en-US'; // 默认使用英文，以适配大语言模型的初始设定
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    isRecording.value = true;
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    inputText.value = transcript;
+    
+    // 如果获得了完整的识别结果，直接当做用户发送消息
+    if (inputText.value.trim()) {
+       messages.value.push({ role: 'assistant', content: `🎤 (Voice): "${transcript}"` })
+       sendMessage();
+    }
+  };
+
+  recognition.onerror = (event) => {
+    console.error("Speech recognition error", event.error);
+    isRecording.value = false;
+    if (event.error === 'not-allowed') {
+       alert("Microphone access was denied. Please allow microphone permissions in your browser.");
+    }
+  };
+
+  recognition.onend = () => {
+    isRecording.value = false;
+  };
+
+  // 保存实例以供停止
+  window.recognitionInstance = recognition;
+  try {
+    recognition.start();
+  } catch(e) {
+    console.error("Recognition start failed: ", e);
+    isRecording.value = false;
+  }
 }
 
 onMounted(() => {
