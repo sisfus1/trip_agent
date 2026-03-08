@@ -158,3 +158,16 @@ async def websocket_gemini_live_endpoint(websocket: WebSocket):
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "vtp-backend"}
+
+# 挂载前端静态文件 (必须在所有 API 路由之后)
+import os
+from fastapi.staticfiles import StaticFiles
+
+# 获取 frontend/dist 的绝对路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(os.path.dirname(current_dir), "frontend", "dist")
+
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+else:
+    logger.warning(f"Static directory {static_dir} not found. Ensure frontend is built before deploying.")

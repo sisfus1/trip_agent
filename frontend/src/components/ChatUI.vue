@@ -144,11 +144,18 @@ const scrollToBottom = async () => {
 }
 
 const connectWebSocket = () => {
-  // 动态获取主机名以兼容不同环境（如本地 localhost, 127.0.0.1 或生产域名）
+  // 动态获取主机名与协议以兼容本地开发(5173/8000)与生产环境(HF Spaces reverse proxy)
   const host = window.location.hostname
+  const port = window.location.port
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  
+  // 如果是本地 Vite 开发服务器 (5173)，则强制指向本地 FastAPI (8000)
+  // 如果是生产环境 (端口非 5173，或者是 HF Spaces 这种去除了端口的 HTTPS)，则直接复用当前 host
+  const wsHost = port === '5173' ? `${host}:8000` : window.location.host
+  
   const wsUrl = mode.value === 'text' 
-    ? `ws://${host}:8000/ws/chat` 
-    : `ws://${host}:8000/ws/gemini-live`
+    ? `${protocol}//${wsHost}/ws/chat` 
+    : `${protocol}//${wsHost}/ws/gemini-live`
     
   if (ws) {
     ws.onclose = null // 防止主动关闭触发重连
