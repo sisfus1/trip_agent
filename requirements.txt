@@ -6,3 +6,9 @@ langsmith
 langchain
 langchain-core
 langchain-openai
+SQLAlchemy
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+websockets>=12,<14
+python-dotenv
