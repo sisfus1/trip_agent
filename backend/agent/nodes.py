@@ -49,11 +49,23 @@ def node_planner(state: TripState) -> Dict[str, Any]:
     """
     user_query = state.get("user_query")
     feedback = state.get("feedback")
+    user_preferences = state.get("user_preferences", "")
     
     print(f"\n[Planner] Generating plan for: {user_query}")
     
-    # 构造能够注入约束的 Prompt
-    system_prompt = "You are a senior travel planner. Draft a comprehensive daily itinerary and estimate the total costs. Use the get_scenic_data tool to get real-time queue and price data for locations."
+    system_prompt = (
+        "You are a senior travel planner. Draft a comprehensive daily itinerary and estimate the total costs.\n"
+        "Use the get_scenic_data tool to get real-time queue and price data for locations.\n\n"
+        "CRITICAL INSTRUCTION: Your final output MUST be a valid raw JSON object string ONLY (no markdown backticks, no markdown code blocks). "
+        "The JSON must have exactly two keys:\n"
+        "- 'message': A markdown string containing your detailed itinerary text.\n"
+        "- 'cards': An array of up to 3 place objects representing the highlights. Each object must have keys: 'type' (always 'place'), 'name', 'image' (use empty string), 'description' (short), 'tags' (array of strings like ['Family', 'Outdoor']), 'price' (string), and 'rating' (number or string)."
+    )
+    
+    if user_preferences:
+        print("[Planner] 🧠 Injecting long-term user preferences from Persistent Memory.")
+        system_prompt += f"\n\nLONG-TERM USER PREFERENCES YOU MUST RESPECT: {user_preferences}"
+        
     if feedback:
         print(f"[Planner] ⚠️ Received constraint feedack: {feedback}. Adjusting plan...")
         system_prompt += f"\n\nCRITICAL FEEDBACK FROM BUDGET INSPECTOR YOU MUST SATISFY BEFORE APPROVAL: {feedback}"
@@ -134,9 +146,10 @@ def node_budget_inspector(state: TripState) -> Dict[str, Any]:
             "messages": [f"Budget REJECTED plan. Reason: {decision.feedback}"]
         }
     
+    # To ensure final output remains a parsable JSON string
     return {
         "is_approved": True,
-        "final_output": f"Final Approved Plan:\n\n{plan}",
+        "final_output": plan,
         "messages": [f"Budget APPROVED the plan. Final thought: {decision.feedback}"]
     }
 
@@ -148,9 +161,12 @@ def node_fallback(state: TripState) -> Dict[str, Any]:
     """
     print("[Fallback] 🛑 Max rounds reached! Forcing a compromise plan.")
     compromise_plan = "The system could not reach an agreement within the maximum negotiation rounds. Please consider summarizing your priorities (e.g., lower hotel class, fewer paid attractions) and requesting a more budget-friendly baseline."
+    import json
+    fallback_json = json.dumps({"message": compromise_plan, "cards": []})
+    
     return {
         "is_approved": True,
-        "current_plan": compromise_plan,
-        "final_output": f"Forced Compromise Result:\n\n{compromise_plan}",
+        "current_plan": fallback_json,
+        "final_output": fallback_json,
         "messages": ["System forced a fallback compromise plan due to infinite loop prevention."]
     }

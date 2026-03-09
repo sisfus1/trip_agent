@@ -9,6 +9,9 @@ class TripState(TypedDict):
     # 用户最初的需求文本记录
     user_query: str
     
+    # 存长期记忆的地方（来自 ChromaDB 的分析）
+    user_preferences: str
+
     # 对话历史，或者中间的步骤流
     # 使用 Annotated 和 add 保证可以做追加而不是替换
     messages: Annotated[List[str], operator.add]

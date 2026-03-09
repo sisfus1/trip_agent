@@ -26,19 +26,23 @@ class MemoryManager:
         )
         print(f"[MemoryManager] ChromaDB initialized at {persist_dir} with collection 'user_preferences'")
 
-    def add_memory(self, doc_id: str, text: str, metadata: dict | None = None):
-        """存储单条记忆记录"""
+    def add_memory(self, doc_id: str, text: str, user_id: int, metadata: dict | None = None):
+        """存储单条记忆记录，带上租户(用户)标记"""
+        meta = metadata or {}
+        meta["user_id"] = user_id
+        
         self.collection.upsert(
             documents=[text],
-            metadatas=[metadata or {}],
+            metadatas=[meta],
             ids=[doc_id]
         )
 
-    def search_memory(self, query: str, n_results: int = 3):
-        """检索相关的记忆记录"""
+    def search_memory(self, query: str, user_id: int, n_results: int = 3):
+        """仅检索特定租户(用户)相关的记忆记录"""
         results = self.collection.query(
             query_texts=[query],
-            n_results=n_results
+            n_results=n_results,
+            where={"user_id": user_id}
         )
         return results
 

@@ -6,3 +6,7 @@ __pycache__/
 .DS_Store
 docker/
 .gemini/
+*.sqlite
+frontend/dist.bak/
+test_*.py
+*.log
