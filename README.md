@@ -5,6 +5,10 @@
 ![Architecture](https://img.shields.io/badge/Architecture-LangGraph_A2A-purple)
 ![Deployment](https://img.shields.io/badge/Deployment-HuggingFace_Spaces-yellow)
 
+## 🌟 项目演示 (Demo)
+
+![Trip Agent Demo](docs/demo.gif)
+
 ## 📌 项目背景与初衷 (Background & Purpose)
 
 在当前的大模型应用中，单体 Agent 往往难以兼顾“发散性的创意规划”与“收敛性的严格审查”。为了突破这一瓶颈，**Trip Agent (Vibe Travel Pilot)** 诞生了。
