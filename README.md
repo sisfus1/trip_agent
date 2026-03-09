@@ -51,5 +51,94 @@
 3. 在 Space 的 **Settings -> Variables and secrets** 中配置 `DEEPSEEK_API_KEY`。
 4. HF 自动解析根目录的 `Dockerfile` 构建并暴露 7860 端口，开启服务！
 
+## 🗺️ 业务流程图 (Business Flow)
+
+```mermaid
+flowchart LR
+    User(["👤 用户终端"])
+
+    subgraph 接入层 ["数据接入层"]
+        direction TB
+        WS["⚡ WebSocket 实时通信"]
+    end
+
+    subgraph AI核心 ["AI 处理核心 (LangGraph)"]
+        direction TB
+        Planner["📋 Planner Agent\n(生成或修改方案)"]
+        Budget["💰 Budget Agent\n(预算审核与规则校验)"]
+        Fallback["🔄 Fallback\n(条件不满足自动重试)"]
+        
+        Planner --> Budget
+        Budget --"校验不通过"--> Fallback
+        Fallback --> Planner
+    end
+
+    subgraph 任务层 ["异步任务工厂"]
+        direction TB
+        Extract["🧠 异步偏好抽取\n(深层意图理解)"]
+    end
+
+    subgraph 存储层 ["数据资源库"]
+        direction TB
+        ChromaDB[("📚 ChromaDB\n(长期偏好向量)")]
+    end
+
+    subgraph 分发层 ["多模态展示层"]
+        direction TB
+        Chat["💬 实时打字机\n(流式交互)"]
+        Cards["🃏 动态卡片面板\n(结构化展示)"]
+    end
+
+    User --"发送需求"--> WS
+    WS --"触发状态机"--> Planner
+    Planner --"检索偏好"--> ChromaDB
+    Budget --"方案通过"--> Chat
+    Budget --"返回结构化数据"--> Cards
+    Chat --> User
+    Cards --> User
+    
+    WS --"旁路触发"--> Extract
+    Extract --"存储新特征"--> ChromaDB
+```
+
+## 🏗️ 技术架构图 (Technical Architecture)
+
+```mermaid
+flowchart TB
+    Frontend["💻 Web Frontend\n(Vue 3 + Tailwind CSS)"]
+
+    subgraph Backend ["Backend Cluster (FastAPI)"]
+        direction TB
+        Gateway["🔌 API Gateway\n(REST API 认证与会话)"]
+        WSHandler["⚡ WebSocket Manager\n(实时连接与状态)"]
+    end
+
+    subgraph AgentSystem ["LangGraph Agent System"]
+        direction LR
+        Orchestrator["🤖 Agent Orchestrator\n(状态机调度)"]
+        Nodes["⚙️ Action Nodes\n(业务逻辑节点)"]
+        Orchestrator <--> Nodes
+    end
+
+    subgraph LLMEngine ["AI Engine"]
+        DeepSeek["🧠 DeepSeek V3 API\n(核心推理、规划与提取)"]
+    end
+
+    subgraph Persistence ["Data Persistence"]
+        SQLite[("🗄️ SQLite\n(业务数据)")]
+        ChromaDB[("🔮 ChromaDB\n(向量数据库)")]
+    end
+
+    Frontend <--"WebSocket (JSON)"--> WSHandler
+    Frontend <--"REST API (HTTP)"--> Gateway
+    
+    Gateway --> SQLite
+    
+    WSHandler <--"Push & Stream"--> Orchestrator
+    
+    Orchestrator <--"Reasoning"--> DeepSeek
+    Orchestrator <--"Similarity Search"--> ChromaDB
+```
+
 ---
-*Developed with System 2 analytical thinking & Antigravity IDE.* 
+*Developed with System 2 analytical thinking & Antigravity IDE.*
